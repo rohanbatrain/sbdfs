@@ -1,0 +1,10 @@
+| **Field**       | **File (Regular)**                            | **Directory**                               | **Explanation**                                                  |
+|-----------------|-----------------------------------------------|---------------------------------------------|------------------------------------------------------------------|
+| **`st_mode`**    | `S_IFREG | 0644` (regular file, permissions)  | `S_IFDIR | 0755` (directory, permissions)   | Specifies the file type (regular or directory) and access mode. |
+| **`st_nlink`**   | `1` (one hard link)                           | `>= 2` (including `.` and `..` links)        | Number of hard links. For directories, `st_nlink` includes subdirs. |
+| **`st_size`**    | Actual size of the file (e.g., 1024 for 1KB)  | `0` (size of the directory structure)        | File size in bytes. For directories, it's often `0`.             |
+| **`st_uid`**     | Current user ID (`getuid()`)                  | Current user ID (`getuid()`)                 | User ID of the file or directory owner.                         |
+| **`st_gid`**     | Current group ID (`getgid()`)                 | Current group ID (`getgid()`)                | Group ID of the file or directory owner.                        |
+| **`st_atime`**   | Last access time (`time_t`)                   | Last access time (`time_t`)                  | Time when the file or directory was last accessed.               |
+| **`st_mtime`**   | Last modification time (`time_t`)             | Last modification time (`time_t`)            | Time when the file or directory was last modified.               |
+| **`st_ctime`**   | Metadata change time (`time_t`)               | Metadata change time (`time_t`)              | Time when file or directory metadata (permissions, ownership) was last changed. |
