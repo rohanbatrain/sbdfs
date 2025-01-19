@@ -4,6 +4,8 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <bson/bson.h>  // Ensure the BSON header is included
+
 
 // Global MongoDB client and collection (to be initialized externally)
 mongoc_client_t *client = NULL;
@@ -65,7 +67,7 @@ int mongo_insert_metadata(const char *path, const struct stat *stbuf) {
     // Determine file type
     const char *type = S_ISDIR(stbuf->st_mode) ? "directory" : "file";
 
-    BSON_INIT(&stat);
+    bson_init(&stat); // Ensure BSON is initialized
 
     BSON_APPEND_UTF8(&stat, "path", path);
     BSON_APPEND_UTF8(&stat, "name", name);
@@ -80,15 +82,19 @@ int mongo_insert_metadata(const char *path, const struct stat *stbuf) {
     BSON_APPEND_TIME_T(&stat, "st_atime", stbuf->st_atime);
     BSON_APPEND_TIME_T(&stat, "st_mtime", stbuf->st_mtime);
     BSON_APPEND_TIME_T(&stat, "st_ctime", stbuf->st_ctime);
-    BSON_APPEND_DOCUMENT_END(&stat);
+    bson_append_document_end(&stat, &stat);  // End BSON document with itself as the child
 
     query = BCON_NEW("path", BCON_UTF8(path));
 
-    if (mongoc_collection_find_one(collection, query, NULL, NULL, NULL, &error)) {
+    // Use mongoc_collection_find_with_opts instead of mongoc_collection_find
+    mongoc_cursor_t *cursor = mongoc_collection_find_with_opts(collection, query, NULL, NULL);
+    if (mongoc_cursor_next(cursor, NULL)) {
         fprintf(stderr, "Error: Document already exists for path %s.\n", path);
+        mongoc_cursor_destroy(cursor);
         bson_destroy(query);
         return -EEXIST;
     }
+    mongoc_cursor_destroy(cursor);
 
     if (!mongoc_collection_insert_one(collection, &stat, NULL, NULL, &error)) {
         fprintf(stderr, "Error: Failed to insert metadata into MongoDB: %s\n", error.message);
@@ -120,7 +126,7 @@ int mongo_update_metadata(const char *path, const struct stat *stbuf) {
     // Determine file type
     const char *type = S_ISDIR(stbuf->st_mode) ? "directory" : "file";
 
-    BSON_INIT(&stat);
+    bson_init(&stat); // Ensure BSON is initialized
 
     BSON_APPEND_DOCUMENT_BEGIN(&stat, "stat", &stat);
     BSON_APPEND_INT32(&stat, "st_mode", stbuf->st_mode);
@@ -131,7 +137,7 @@ int mongo_update_metadata(const char *path, const struct stat *stbuf) {
     BSON_APPEND_TIME_T(&stat, "st_atime", stbuf->st_atime);
     BSON_APPEND_TIME_T(&stat, "st_mtime", stbuf->st_mtime);
     BSON_APPEND_TIME_T(&stat, "st_ctime", stbuf->st_ctime);
-    BSON_APPEND_DOCUMENT_END(&stat);
+    bson_append_document_end(&stat, &stat);  // End BSON document with itself as the child
 
     query = BCON_NEW("path", BCON_UTF8(path));
     update = BCON_NEW("$set", "{", 
@@ -153,52 +159,47 @@ int mongo_update_metadata(const char *path, const struct stat *stbuf) {
     return 0;
 }
 
-/**
- * Queries MongoDB for all paths and extracts top-level directories.
- * 
- * @param root: The root directory where the structure starts ("/").
- * @return 0 on success, -1 on failure.
- */
-int construct_directory_structure(const char *root) {
-    bson_t query = BSON_INITIALIZER;
-    mongoc_cursor_t *cursor;
-    const bson_t *doc;
-    bson_iter_t iter;
+int mongo_create_directory(const char *path) {
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(struct stat));
+    stbuf.st_mode = S_IFDIR | 0755; // Directory with default permissions
+    stbuf.st_nlink = 2;            // Default link count for directories
 
-    cursor = mongoc_collection_find_with_opts(collection, &query, NULL, NULL);
+    bson_t *doc = bson_new();
+    BSON_APPEND_UTF8(doc, "path", path);
+    BSON_APPEND_UTF8(doc, "type", "directory");
 
-    while (mongoc_cursor_next(cursor, &doc)) {
-        if (bson_iter_init_find(&iter, doc, "path") && BSON_ITER_HOLDS_UTF8(&iter)) {
-            const char *path = bson_iter_utf8(&iter, NULL);
-
-            // Skip the root directory itself
-            if (strcmp(path, "/") == 0) {
-                continue;
-            }
-
-            // Extract top-level directory or file
-            const char *sub_path = strchr(path + 1, '/');
-            if (!sub_path) {
-                sub_path = path + strlen(path); // No further slashes; use the full path
-            }
-
-            size_t length = sub_path - path;
-            char top_level[length + 1];
-            strncpy(top_level, path, length);
-            top_level[length] = '\0';
-
-            printf("Top-level directory: %s\n", top_level); // Debugging
-            // You can now use `top_level` to create directories in FUSE
-        }
+    bson_error_t error;
+    if (!mongoc_collection_insert_one(collection, doc, NULL, NULL, &error)) {
+        fprintf(stderr, "Error: Failed to create directory metadata: %s\n", error.message);
+        bson_destroy(doc);
+        return -EIO;
     }
 
-    if (mongoc_cursor_error(cursor, NULL)) {
-        fprintf(stderr, "Error querying MongoDB for paths.\n");
-        mongoc_cursor_destroy(cursor);
-        return -1;
+    bson_destroy(doc);
+    return 0;
+}
+
+int mongo_create_file(const char *path, size_t size) {
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(struct stat));
+    stbuf.st_mode = S_IFREG | 0644; // Regular file with default permissions
+    stbuf.st_nlink = 1;            // Default link count for files
+    stbuf.st_size = size;          // File size
+
+    bson_t *doc = bson_new();
+    BSON_APPEND_UTF8(doc, "path", path);
+    BSON_APPEND_UTF8(doc, "type", "file");
+    BSON_APPEND_INT64(doc, "size", size);
+
+    bson_error_t error;
+    if (!mongoc_collection_insert_one(collection, doc, NULL, NULL, &error)) {
+        fprintf(stderr, "Error: Failed to create file metadata: %s\n", error.message);
+        bson_destroy(doc);
+        return -EIO;
     }
 
-    mongoc_cursor_destroy(cursor);
+    bson_destroy(doc);
     return 0;
 }
 
