@@ -59,5 +59,5 @@ git clone https://github.com/your-username/sbdfs.git
 cd sbdfs
 
 # Run the filesystem (replace /mnt/sbdfs with your desired mount point)
-python sbdfs.py /mnt/sbdfs
+python main.py /mnt/sbdfs
 ```
