@@ -55,7 +55,7 @@ SBDFS is currently a **work-in-progress** and may or may not evolve into a compl
 pip install fusepy pymongo
 
 # Clone the repo
-git clone https://github.com/your-username/sbdfs.git
+git clone https://github.com/rohanbatrain/sbdfs.git
 cd sbdfs
 
 # Run the filesystem (replace /mnt/sbdfs with your desired mount point)
